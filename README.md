@@ -77,4 +77,4 @@ Duty cycle greater than 1 is undefined, so we clip the duty cycle to the range [
 
 ## Initial Design Drafts
 [chassis](./doc/chassis_product_design_draft.png)
-[operation](./doc/operational_flow_chart_draft.png)
+[operation](./doc/operational_flowchart_draft.png)
