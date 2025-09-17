@@ -75,6 +75,23 @@ def play_note_on_all_picos(freq, ms):
             print(f"Error contacting {ip}: {e}")
             
 # -- additional api calls
+def play_note_on_specific_picos(freq, ms, listed_ips):
+    """Sends a /tone POST request to every Pico in the list."""
+    print(f"Playing note: {freq}Hz for {ms}ms on all devices.")
+
+    payload = {"freq": freq, "ms": ms, "duty": 0.5}
+
+    for ip in listed_ips:
+        url = f"http://{ip}/tone"
+        try:
+            # We use a short timeout because we don't need to wait for a response
+            # This makes the orchestra play more in sync.
+            requests.post(url, json=payload, timeout=0.1)
+        except requests.exceptions.Timeout:
+            # This is expected, we can ignore it
+            pass
+        except requests.exceptions.RequestException as e:
+            print(f"Error contacting {ip}: {e}")
 
 def play_melody_on_all_picos(song, note_gap):
     # POST /melody API Call
@@ -82,6 +99,15 @@ def play_melody_on_all_picos(song, note_gap):
     #plays melody on all connected PICOS
     for note, duration in song:
             play_note_on_all_picos(note, duration)
+            # Wait for the note's duration plus a small gap before playing the next one
+            time.sleep(note_gap / 1000)
+            
+def play_melody_on_specifc_picos(song, note_gap, listed_ips):
+    # POST /melody API Call
+    # takes a song, list of note structs, and a note_gap
+    #plays melody on all connected PICOS
+    for note, duration in song:
+            play_note_on_specific_picos(note, duration, listed_ips)
             # Wait for the note's duration plus a small gap before playing the next one
             time.sleep(note_gap / 1000)
             
@@ -221,14 +247,59 @@ def get_melody(ip, sampling_rate):
         print("\nStopped melody streaming.")
 
 # CLI command handlers
-def handle_play_note(args):
-    # play_note <device> <freq> <duration>
-    print("TODO: implement play_melody_all")
+def handle_play_note_specific(args):
+    if len(args) != 3:
+        print("Usage: play_note <device1,device2,...> <freq> <duration>")
+        return
+    device_list_str, freq_str, duration_str = args
+    device_names = device_list_str.split(",")
+    try:
+        freq = int(freq_str)
+        duration = int(duration_str)
+    except ValueError:
+        print("freq and duration must be integers")
+        return
+    listed_ips = []
+    for name in device_names:
+        ip = device_map.get(name)
+        if not ip:
+            print(f"Unknown device {name}, skipping")
+        else:
+            listed_ips.append(ip)
+    if not listed_ips:
+        print("No valid devices to play note on")
+        return
+    play_note_on_specific_picos(freq, duration, listed_ips)
 
-def handle_play_melody(args):
-    # play_melody <device> <song> <note_gap>
-    print("TODO: implement play_melody")
 
+def handle_play_melody_specific(args):
+    """
+    Usage: play_melody_specific <note_gap> <device1> [device2 ...]
+    """
+    # TO-DO add functionality to let user play songs from CLI
+    
+    if len(args) != 2:
+        print("Usage: play_melody <device1,device2,...> <note_gap>")
+        return
+    device_list_str, note_gap_str = args
+    device_names = device_list_str.split(",")
+    try:
+        note_gap = int(note_gap_str)
+    except ValueError:
+        print("note_gap must be an integer")
+        return
+    listed_ips = []
+    for name in device_names:
+        ip = device_map.get(name)
+        if not ip:
+            print(f"Unknown device {name}, skipping")
+        else:
+            listed_ips.append(ip)
+    if not listed_ips:
+        print("No valid devices to play melody on")
+        return
+    play_melody_on_specifc_picos(SONG, note_gap, listed_ips)
+    
 def handle_play_note_all(args):
     # play_note_all <freq> <duration>
     if len(args) != 2:
@@ -239,6 +310,8 @@ def handle_play_note_all(args):
     play_note_on_all_picos(freq, duration)
 
 def handle_play_melody_all(args):
+    # TO-DO add functionality to let user play songs from CLI
+    
     if len(args) != 1:
         print("Usage: play_melody_all <note_gap>")
         return
@@ -366,8 +439,8 @@ def handle_set_range(args):
         print(f"Error contacting {ip}: {e}")
 
 COMMAND_HANDLERS = {
-    "play_note": handle_play_note,
-    "play_melody": handle_play_melody,
+    "play_note": handle_play_note_specific,
+    "play_melody": handle_play_melody_specific,
     "play_note_all": handle_play_note_all,
     "play_melody_all": handle_play_melody_all,
     "get_health": handle_get_health,
@@ -381,7 +454,7 @@ COMMAND_HANDLERS = {
 }
 
 def main():
-    print("--- Pico CLI ---")
+    print("--- Conductor App for Miniproject ---")
     print("Type 'help' for commands, 'exit' to quit or CTRL+C")
 
     # Build device mapping (device_1, device_2, etc.)
@@ -392,7 +465,6 @@ def main():
     print("Detected devices:")
     for name, ip in device_map.items():
         print(f"  {name}: {ip}")
-
     try:
         while True:
             cmd_input = input("> ").strip()
@@ -411,8 +483,8 @@ def main():
                 print("""Commands:
 play_note_all <freq> <duration>
 play_melody_all <song> <note_gap>
-play_note <device> <freq> <duration>
-play_melody <device> <song> <note_gap>
+play_note <targeted devices> <freq> <duration>
+play_melody <targeted devices> <song> <note_gap>
 get_health <device>
 get_mode <device>
 get_range <device>
