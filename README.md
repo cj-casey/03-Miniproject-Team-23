@@ -93,7 +93,7 @@ In each of the eyes, we will place the photoresistors (currently only 1) to allo
 ### Features
 Our main design goal was to allow the product to achieve two different modes: Live Play, and Record & Play. Live Play is more akin to playing an instrument, light goes in, sound comes out immediately. Record & Play waits until the user shines light at it, and then begins to record until the user stops or the maximum length song is reached. Afterwards, it plays back the full song. On the parent side, in the conductor app, we developed a CLI that allows them to see which Pico Light Orchestras are available to connect to, and enter specific commands to interact with any or all of them. Instead of needing to remember the IPs, we map them to device names, which makes interacting with them much easier as a user.
 ### Commands / API Calls for Conductor
-play_note_all <freq> <duration> - plays a note on all available devices for a given duration
+play_note_all <freq> <duration> - plays a note on all available devices for a given duration\n
 play_melody_all <song> <note_gap> - plays a melody on all available devices with a given note gap
 play_note <targeted devices> <freq> <duration> - plays a note on listed devices for a given duration
 play_melody <targeted devices> <song> <note_gap> - plays a melody on specific available devices with a given note gap
