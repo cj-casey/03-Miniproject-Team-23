@@ -79,3 +79,4 @@ Duty cycle greater than 1 is undefined, so we clip the duty cycle to the range [
 [chassis](./doc/chassis_product_design_draft.png)
 [onshape design](https://cad.onshape.com/documents/3d0e02dee876016a6d19eae0)
 [operation](./doc/operational_flowchart_draft.png)
+[circuit](MiniProjectSchematic.pdf)
