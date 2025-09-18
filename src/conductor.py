@@ -8,7 +8,7 @@ import time
 # --- Configuration ---
 # Students should populate this list with the IP address(es of their Picos
 PICO_IPS = [
-    "192.168.1.101",
+    "10.0.0.233",
 ]
 
 # --- Music Definition ---

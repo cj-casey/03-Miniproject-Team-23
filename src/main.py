@@ -1,233 +1,341 @@
-# main.py for Raspberry Pi Pico W
-# Title: Pico Light Orchestra Instrument Code
+# main.py - Pico Light Orchestra Firmware (Fixed)
+# For Raspberry Pi Pico 2W with MicroPython
 
 import machine
 import time
 import network
 import json
 import asyncio
+import gc
+import ubinascii
 
 # --- Pin Configuration ---
-# The photosensor is connected to an Analog-to-Digital Converter (ADC) pin.
-# We will read the voltage, which changes based on light.
-photo_sensor_pin = machine.ADC(26)
+# IMPORTANT: Using GP26 for ADC (not GP28 which is reserved on Pico W)
+photo_sensor_pin = machine.ADC(26)  # ADC0 on GP26
 
-# The buzzer is connected to a GPIO pin that supports Pulse Width Modulation (PWM).
-# PWM allows us to create a square wave at a specific frequency to make a sound.
-buzzer_pin = machine.PWM(machine.Pin(18))
+# Buzzer on GP16 with PWM
+buzzer_pin = machine.PWM(machine.Pin(16))
 
 # --- Global State ---
-# This variable will hold the task that plays a note from an API call.
-# This allows us to cancel it if a /stop request comes in.
+device_id = ubinascii.hexlify(machine.unique_id()).decode()
+current_mode = "Live Play"
+sensor_range = 100
 api_note_task = None
+recorded_melody = []
+recording_start_time = 0
+is_recording = False
+last_sensor_value = 0
+normalized_value = 0
+ip_address = "0.0.0.0"  # Initialize to prevent undefined errors
+
+# Musical notes
+NOTES = {
+    'C4': 262, 'D4': 294, 'E4': 330, 'F4': 349,
+    'G4': 392, 'A4': 440, 'B4': 494, 'C5': 523
+}
 
 # --- Core Functions ---
 
-
-def connect_to_wifi(wifi_config: str = "wifi_config.json"):
-    """Connects the Pico W to the specified Wi-Fi network.
-
-    This expects a JSON text file 'wifi_config.json' with 'ssid' and 'password' keys,
-    which would look like
-    {
-        "ssid": "your_wifi_ssid",
-        "password": "your_wifi_password"
-    }
-    """
-
-    with open(wifi_config, "r") as f:
-        data = json.load(f)
+def connect_to_wifi(wifi_config="wifi_config.json"):
+    """Connects the Pico W to WiFi."""
+    try:
+        with open(wifi_config, "r") as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"Error reading wifi_config.json: {e}")
+        return None
 
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
+    
+    print(f"Connecting to {data['ssid']}...")
     wlan.connect(data["ssid"], data["password"])
 
-    # Wait for connection or fail
-    max_wait = 10
-    print("Connecting to Wi-Fi...")
+    # Wait for connection
+    max_wait = 15
     while max_wait > 0:
-        if wlan.status() < 0 or wlan.status() >= 3:
+        status = wlan.status()
+        if status < 0 or status >= 3:
             break
         max_wait -= 1
+        print(f"Waiting... status: {status}")
         time.sleep(1)
 
     if wlan.status() != 3:
-        raise RuntimeError("Network connection failed")
-    else:
-        status = wlan.ifconfig()
-        ip_address = status[0]
-        print(f"Connected! Pico IP Address: {ip_address}")
-    return ip_address
+        print(f"Failed to connect. Status: {wlan.status()}")
+        return None
+    
+    ip = wlan.ifconfig()[0]
+    print(f"Connected! IP: {ip}")
+    print(f"Device ID: {device_id}")
+    return ip
 
+def read_sensor():
+    """Read and normalize the light sensor value."""
+    global last_sensor_value, normalized_value
+    
+    raw_value = photo_sensor_pin.read_u16()
+    last_sensor_value = raw_value
+    
+    # Normalize to 0.0 - 1.0 range
+    min_light = 1000
+    max_light = 65000
+    
+    clamped = max(min_light, min(raw_value, max_light))
+    normalized_value = (clamped - min_light) / (max_light - min_light)
+    
+    return raw_value, normalized_value
 
-def play_tone(frequency: int, duration_ms: int) -> None:
-    """Plays a tone on the buzzer for a given duration."""
-    if frequency > 0:
-        buzzer_pin.freq(int(frequency))
-        buzzer_pin.duty_u16(32768)  # 50% duty cycle
-        time.sleep_ms(duration_ms)  # type: ignore[attr-defined]
-        stop_tone()
-    else:
-        time.sleep_ms(duration_ms)  # type: ignore[attr-defined]
+def estimate_lux(raw_value):
+    """Estimate lux from ADC reading."""
+    max_lux = 10000
+    lux = (raw_value / 65535) * max_lux
+    return int(lux)
 
+def light_to_frequency(norm_value):
+    """Map normalized light value to frequency."""
+    if norm_value < 0.1:
+        return 0
+    
+    min_freq = NOTES['C4']
+    max_freq = NOTES['C5']
+    freq = min_freq + (norm_value * (max_freq - min_freq))
+    return int(freq)
 
 def stop_tone():
-    """Stops any sound from playing."""
-    buzzer_pin.duty_u16(0)  # 0% duty cycle means silence
-
-
-async def play_api_note(frequency, duration_s):
-    """Coroutine to play a note from an API call, can be cancelled."""
+    """Stop any sound from playing."""
     try:
-        print(f"API playing note: {frequency}Hz for {duration_s}s")
-        buzzer_pin.freq(int(frequency))
-        buzzer_pin.duty_u16(32768)  # 50% duty cycle
-        await asyncio.sleep(duration_s)
-        stop_tone()
-        print("API note finished.")
-    except asyncio.CancelledError:
-        stop_tone()
-        print("API note cancelled.")
-
-
-def map_value(x, in_min, in_max, out_min, out_max):
-    """Maps a value from one range to another."""
-    return (x - in_min) * (out_max - out_min) // (in_max - in_min) + out_min
-
-
-async def handle_request(reader, writer):
-    """Handles incoming HTTP requests."""
-    global api_note_task
-
-    print("Client connected")
-    request_line = await reader.readline()
-    # Skip headers
-    while await reader.readline() != b"\r\n":
+        buzzer_pin.duty_u16(0)
+    except:
         pass
 
+async def play_api_note(frequency, duration_ms, duty=0.5):
+    """Async coroutine to play a note from API call."""
     try:
-        request = str(request_line, "utf-8")
-        method, url, _ = request.split()
-        print(f"Request: {method} {url}")
-    except (ValueError, IndexError):
-        writer.write(b"HTTP/1.0 400 Bad Request\r\n\r\n")
-        await writer.drain()
-        writer.close()
-        await writer.wait_closed()
-        return
+        if frequency > 0:
+            buzzer_pin.freq(int(frequency))
+            duty_u16 = int(duty * 65535)
+            buzzer_pin.duty_u16(duty_u16)
+            await asyncio.sleep_ms(duration_ms)
+            stop_tone()
+    except asyncio.CancelledError:
+        stop_tone()
 
-    # Read current sensor value
-    light_value = photo_sensor_pin.read_u16()
+# --- Simplified Web Server ---
 
-    response = ""
-    content_type = "text/html"
-
-    # --- API Endpoint Routing ---
-    if method == "GET" and url == "/":
-        html = f"""
-        <html>
-            <body>
-                <h1>Pico Light Orchestra</h1>
-                <p>Current light sensor reading: {light_value}</p>
-            </body>
-        </html>
-        """
-        response = html
-    elif method == "POST" and url == "/play_note":
-        # This requires reading the request body, which is not trivial.
-        # A simple approach for a known content length:
-        # Note: A robust server would parse Content-Length header.
-        # For this student project, we'll assume a small, simple JSON body.
-        raw_data = await reader.read(1024)
-        try:
-            data = json.loads(raw_data)
-            freq = data.get("frequency", 0)
-            duration = data.get("duration", 0)
-
-            # If a note is already playing via API, cancel it first
-            if api_note_task:
-                api_note_task.cancel()
-
-            # Start the new note as a background task
-            api_note_task = asyncio.create_task(play_api_note(freq, duration))
-
-            response = '{"status": "ok", "message": "Note playing started."}'
-            content_type = "application/json"
-        except (ValueError, json.JSONDecodeError):
-            writer.write(b'HTTP/1.0 400 Bad Request\r\n\r\n{"error": "Invalid JSON"}\r\n')
-            await writer.drain()
+async def handle_request(reader, writer):
+    """Handle incoming HTTP requests."""
+    global api_note_task, current_mode, sensor_range
+    
+    try:
+        # Read request
+        request_line = await reader.readline()
+        
+        # Skip headers
+        while True:
+            line = await reader.readline()
+            if line == b"\r\n":
+                break
+        
+        # Parse request
+        request = request_line.decode().strip()
+        if not request:
             writer.close()
             await writer.wait_closed()
             return
-
-    elif method == "POST" and url == "/stop":
-        if api_note_task:
-            api_note_task.cancel()
-            api_note_task = None
-        stop_tone()  # Force immediate stop
-        response = '{"status": "ok", "message": "All sounds stopped."}'
-        content_type = "application/json"
-    else:
-        writer.write(b"HTTP/1.0 404 Not Found\r\n\r\n")
+            
+        parts = request.split()
+        if len(parts) < 2:
+            writer.close()
+            await writer.wait_closed()
+            return
+            
+        method, path = parts[0], parts[1]
+        print(f"{method} {path}")
+        
+        # Simple routing
+        if path == "/health":
+            response = json.dumps({
+                "status": "active",
+                "device_id": device_id,
+                "api": "v1.0"
+            })
+            writer.write(b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n")
+            writer.write(response.encode())
+            
+        elif path == "/sensor":
+            raw, norm = read_sensor()
+            response = json.dumps({
+                "raw": raw,
+                "norm": round(norm, 3),
+                "lux_est": estimate_lux(raw)
+            })
+            writer.write(b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n")
+            writer.write(response.encode())
+            
+        elif path == "/get_mode":
+            response = json.dumps({"mode": current_mode})
+            writer.write(b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n")
+            writer.write(response.encode())
+            
+        elif path == "/get_range":
+            response = json.dumps({"range": sensor_range})
+            writer.write(b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n")
+            writer.write(response.encode())
+            
+        elif method == "POST" and path == "/tone":
+            # Read body (simplified - assumes small payload)
+            body = await reader.read(200)
+            try:
+                data = json.loads(body)
+                freq = int(data.get("freq", 440))
+                ms = int(data.get("ms", 100))
+                duty = float(data.get("duty", 0.5))
+                
+                # Cancel existing note
+                if api_note_task and not api_note_task.done():
+                    api_note_task.cancel()
+                
+                # Play new note
+                api_note_task = asyncio.create_task(play_api_note(freq, ms, duty))
+                
+                response = json.dumps({"status": "ok"})
+                writer.write(b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n")
+                writer.write(response.encode())
+            except Exception as e:
+                print(f"Tone error: {e}")
+                writer.write(b"HTTP/1.0 400 Bad Request\r\n\r\n")
+                
+        elif method == "POST" and path == "/stop":
+            if api_note_task and not api_note_task.done():
+                api_note_task.cancel()
+            stop_tone()
+            response = json.dumps({"status": "ok"})
+            writer.write(b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n")
+            writer.write(response.encode())
+            
+        elif method == "POST" and path == "/post_mode":
+            body = await reader.read(200)
+            try:
+                data = json.loads(body)
+                mode = data.get("mode", "")
+                if mode in ["l", "L", "Live Play"]:
+                    current_mode = "Live Play"
+                elif mode in ["r", "R", "Record & Play"]:
+                    current_mode = "Record & Play"
+                response = json.dumps({"status": "ok", "mode": current_mode})
+                writer.write(b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n")
+                writer.write(response.encode())
+            except:
+                writer.write(b"HTTP/1.0 400 Bad Request\r\n\r\n")
+                
+        elif method == "POST" and path == "/post_range":
+            body = await reader.read(200)
+            try:
+                data = json.loads(body)
+                sensor_range = int(data.get("range", 100))
+                response = json.dumps({"status": "ok", "range": sensor_range})
+                writer.write(b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n")
+                writer.write(response.encode())
+            except:
+                writer.write(b"HTTP/1.0 400 Bad Request\r\n\r\n")
+                
+        elif path == "/":
+            raw, norm = read_sensor()
+            html = f"""<html><body>
+            <h1>Pico Light Orchestra</h1>
+            <p>Device: {device_id}</p>
+            <p>IP: {ip_address}</p>
+            <p>Mode: {current_mode}</p>
+            <p>Sensor: {raw} (norm: {norm:.3f})</p>
+            </body></html>"""
+            writer.write(b"HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n")
+            writer.write(html.encode())
+            
+        else:
+            writer.write(b"HTTP/1.0 404 Not Found\r\n\r\n")
+            
+    except Exception as e:
+        print(f"Request error: {e}")
+    finally:
         await writer.drain()
         writer.close()
         await writer.wait_closed()
-        return
 
-    # Send response
-    writer.write(
-        f"HTTP/1.0 200 OK\r\nContent-type: {content_type}\r\n\r\n".encode("utf-8")
-    )
-    writer.write(response.encode("utf-8"))
-    await writer.drain()
-    writer.close()
-    await writer.wait_closed()
-    print("Client disconnected")
-
+async def sensor_loop():
+    """Main sensor reading loop."""
+    while True:
+        try:
+            # Skip if API note is playing
+            if api_note_task and not api_note_task.done():
+                await asyncio.sleep_ms(100)
+                continue
+            
+            # Read sensor and play tone in Live Play mode
+            if current_mode == "Live Play":
+                raw, norm = read_sensor()
+                if norm > 0.1:
+                    freq = light_to_frequency(norm)
+                    if freq > 0:
+                        buzzer_pin.freq(freq)
+                        buzzer_pin.duty_u16(32768)  # 50% duty
+                else:
+                    stop_tone()
+            
+            await asyncio.sleep_ms(100)
+            
+        except Exception as e:
+            print(f"Sensor loop error: {e}")
+            await asyncio.sleep_ms(1000)
 
 async def main():
-    """Main execution loop."""
-    try:
-        ip = connect_to_wifi()
-        print(f"Starting web server on {ip}...")
-        asyncio.create_task(asyncio.start_server(handle_request, "0.0.0.0", 80))
-    except Exception as e:
-        print(f"Failed to initialize: {e}")
+    """Main entry point."""
+    global ip_address
+    
+    print("\n=== Pico Light Orchestra Starting ===")
+    
+    # Connect to WiFi
+    ip_address = connect_to_wifi()
+    if not ip_address:
+        print("Running in offline mode - WiFi failed")
+        # Could still run sensor loop without network
         return
-
-    # This loop runs the "default" behavior: playing sound based on light
-    while True:
-        # Only run this loop if no API note is currently scheduled to play
-        if api_note_task is None or api_note_task.done():
-            # Read the sensor. Values range from ~500 (dark) to ~65535 (bright)
-            light_value = photo_sensor_pin.read_u16()
-
-            # Map the light value to a frequency range (e.g., C4 to C6)
-            # Adjust the input range based on your room's lighting
-            min_light = 1000
-            max_light = 65000
-            min_freq = 261  # C4
-            max_freq = 1046  # C6
-
-            # Clamp the light value to the expected range
-            clamped_light = max(min_light, min(light_value, max_light))
-
-            if clamped_light > min_light:
-                frequency = map_value(
-                    clamped_light, min_light, max_light, min_freq, max_freq
-                )
-                buzzer_pin.freq(frequency)
-                buzzer_pin.duty_u16(32768)  # 50% duty cycle
-            else:
-                stop_tone()  # If it's very dark, be quiet
-
-        await asyncio.sleep_ms(50)  # type: ignore[attr-defined]
-
-
-# Run the main event loop
-if __name__ == "__main__":
+    
+    # Start web server
+    print(f"Starting web server on port 80...")
     try:
+        server = await asyncio.start_server(handle_request, "0.0.0.0", 80)
+    except Exception as e:
+        print(f"Server start error: {e}")
+        return
+    
+    # Start sensor loop
+    sensor_task = asyncio.create_task(sensor_loop())
+    
+    # Keep running
+    print("System ready!")
+    print(f"Dashboard: http://{ip_address}/")
+    
+    while True:
+        await asyncio.sleep(1)
+        gc.collect()  # Periodic garbage collection
+
+# --- Entry Point ---
+
+if __name__ == "__main__":
+    # Initialize hardware
+    stop_tone()
+    
+    try:
+        # Run async main
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("Program stopped.")
+        print("\nShutdown requested")
         stop_tone()
+    except Exception as e:
+        print(f"Fatal error: {e}")
+        stop_tone()
+        # Wait before potential restart
+        time.sleep(5)
+    # Removed machine.reset() - no more boot loops!
+    
