@@ -93,15 +93,15 @@ In each of the eyes, we will place the photoresistors (currently only 1) to allo
 ### Features
 Our main design goal was to allow the product to achieve two different modes: Live Play, and Record & Play. Live Play is more akin to playing an instrument, light goes in, sound comes out immediately. Record & Play waits until the user shines light at it, and then begins to record until the user stops or the maximum length song is reached. Afterwards, it plays back the full song. On the parent side, in the conductor app, we developed a CLI that allows them to see which Pico Light Orchestras are available to connect to, and enter specific commands to interact with any or all of them. Instead of needing to remember the IPs, we map them to device names, which makes interacting with them much easier as a user.
 ### Commands / API Calls for Conductor
-play_note_all <freq> <duration> - plays a note on all available devices for a given duration  
-play_melody_all <song> <note_gap> - plays a melody on all available devices with a given note gap  
-play_note <targeted devices> <freq> <duration> - plays a note on listed devices for a given duration  
-play_melody <targeted devices> <song> <note_gap> - plays a melody on specific available devices with a given note gap  
-get_health <device> - returns the status of a specific device  
-get_mode <device> - returns the current mode of a specific device  
-get_range <device> - returns the light level range of detection for a specific device  
-get_sensor_data <device> - returns the current sensor's reading for a specific device  
-get_events <device> <sampling_rate> - returns the current sensors reading in a live feed at a chosen sampling rate for a specific device  
-get_melody <device> <sampling_rate> - returns the playing notes in a live feed at a chosen sampling rate for a specific device  
-set_mode <device> <mode> - sets the mode of a specific to device to either "Record & Play" or "Live Play"  
-set_range <device> <range> - sets the light level range of detection for a specific device (good for calibrating for better detection)
+play_note_all -freq -duration : plays a note on all available devices for a given duration  
+play_melody_all -song -note_gap : plays a melody on all available devices with a given note gap  
+play_note -targeted_devices -freq -duration : plays a note on listed devices for a given duration  
+play_melody -targeted_devices -song -note_gap : plays a melody on specific available devices with a given note gap  
+get_health -device : returns the status of a specific device  
+get_mode -device : returns the current mode of a specific device  
+get_range -device : returns the light level range of detection for a specific device  
+get_sensor_data -device : returns the current sensor's reading for a specific device  
+get_events -device -sampling_rate : returns the current sensors reading in a live feed at a chosen sampling rate for a specific device  
+get_melody -device -sampling_rate : returns the playing notes in a live feed at a chosen sampling rate for a specific device  
+set_mode -device -mode : sets the mode of a specific to device to either "Record & Play" or "Live Play"  
+set_range -device -range : sets the light level range of detection for a specific device (good for calibrating for better detection)
