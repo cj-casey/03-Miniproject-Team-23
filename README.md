@@ -77,6 +77,9 @@ Duty cycle greater than 1 is undefined, so we clip the duty cycle to the range [
 
 ## Initial Design Drafts
 The initial design for the project is shown here: [chassis](./doc/chassis_product_design_draft.png)
-The design created on onshape is shown here: [onshape design](https://cad.onshape.com/documents/3d0e02dee876016a6d19eae0)
+
+The design created on onshape is shown here: https://cad.onshape.com/documents/3d0e02dee876016a6d19eae0
+
 The flowchart for the processes is shown here: [operation](./doc/operational_flowchart_draft.png)
+
 The overall circuit is shown here: [circuit](MiniProjectSchematic.pdf)
